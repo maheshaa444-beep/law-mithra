@@ -10,9 +10,10 @@ import {
   FileText, Scale, AlertTriangle, CheckCircle2, XCircle,
   User, BookOpen, Shield, Gavel, Printer, Sparkles,
   RefreshCw, Clock, Download, ChevronDown, ChevronUp,
-  Info, History,
+  Info, History, Loader2,
 } from 'lucide-react';
 import { ComplaintReport, ReportListResponse, downloadReportPDF } from '@/lib/api';
+import { useToast } from '@/components/ui/Toast';
 
 // ── Colour helpers ─────────────────────────────────────────────────────────────
 const GOLD   = '#D9A441';
@@ -93,6 +94,7 @@ export function ComplaintReportView({
   onGenerate,
   onSelectVersion,
 }: ComplaintReportViewProps) {
+  const { addToast } = useToast();
   const printRef = useRef<HTMLDivElement>(null);
   const [showHistory, setShowHistory] = useState(false);
   const [downloading, setDownloading] = useState(false);
@@ -103,6 +105,17 @@ export function ComplaintReportView({
     setDownloading(true);
     try {
       await downloadReportPDF(documentId, report.id);
+      addToast({
+        title: 'PDF Downloaded',
+        description: `Law Mithra complaint report (${report.report_id}) downloaded.`,
+        variant: 'success',
+      });
+    } catch (err: any) {
+      addToast({
+        title: 'Download Failed',
+        description: err.message || 'Could not download PDF report.',
+        variant: 'destructive',
+      });
     } finally {
       setDownloading(false);
     }
@@ -279,9 +292,10 @@ export function ComplaintReportView({
             <RefreshCw className="w-3 h-3" /> Regenerate
           </button>
           <button onClick={handleDownloadPDF} disabled={downloading}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-semibold font-sans"
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-semibold font-sans cursor-pointer disabled:opacity-60"
             style={{ border:`1px solid ${BORDER}`, color:GOLD_H, background:'linear-gradient(135deg,rgba(92,68,32,0.6),rgba(74,54,24,0.6))' }}>
-            <Download className="w-3 h-3" /> {downloading ? 'Downloading…' : 'Download PDF'}
+            {downloading ? <Loader2 className="w-3 h-3 animate-spin" /> : <Download className="w-3 h-3" />}
+            <span>{downloading ? 'Downloading…' : 'Download PDF'}</span>
           </button>
           <button onClick={handlePrint}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-semibold font-sans"

@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   Scale,
@@ -20,11 +20,21 @@ import {
   Copy,
   Check,
   Sparkles,
+  Trash2,
+  Loader2,
+  AlertTriangle,
 } from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
 import { useLanguage } from '@/context/LanguageContext';
+import { useToast } from '@/components/ui/Toast';
 import { SupportedLanguage } from '@/lib/translations';
-import { askLegalAssistant } from '@/lib/api';
+import {
+  askLegalAssistant,
+  fetchChatSessions,
+  fetchChatSessionDetail,
+  createChatSession,
+  deleteChatSession,
+} from '@/lib/api';
 
 interface ChatMessage {
   id: string;
@@ -56,6 +66,8 @@ interface ChatDashboardPageProps {
   onOpenUpload?: () => void;
   onOpenVault?: () => void;
   onOpenSettings?: () => void;
+  onOpenDashboard?: () => void;
+  onNavigateHome?: () => void;
   onLogout?: () => void;
 }
 
@@ -63,9 +75,12 @@ export function ChatDashboardPage({
   onOpenUpload,
   onOpenVault,
   onOpenSettings,
+  onOpenDashboard,
+  onNavigateHome,
   onLogout,
 }: ChatDashboardPageProps) {
   const { user, logout } = useAuth();
+  const { addToast } = useToast();
   const { language, setLanguage, languages, t, currentLanguage } = useLanguage();
 
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
@@ -84,12 +99,72 @@ export function ChatDashboardPage({
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [isListening, setIsListening] = useState(false);
 
+  // Persistence, loading and deletion state
+  const [sessionsLoading, setSessionsLoading] = useState(false);
+  const [sessionError, setSessionError] = useState<string | null>(null);
+  const [deleteConfirmSessionId, setDeleteConfirmSessionId] = useState<string | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
+
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, isThinking]);
+
+  // Load persistent conversation sessions on mount and user auth change
+  const loadSessions = useCallback(async (selectId?: string | null) => {
+    setSessionsLoading(true);
+    setSessionError(null);
+    try {
+      const serverSessions = await fetchChatSessions();
+      const mapped: ChatSession[] = serverSessions.map((s) => ({
+        id: s.id,
+        title: s.title,
+        messages: [],
+      }));
+      setRecentChats(mapped);
+
+      const targetId = selectId !== undefined ? selectId : (mapped.length > 0 ? mapped[0].id : null);
+      if (targetId) {
+        const target = mapped.find((s) => s.id === targetId) || mapped[0];
+        if (target) {
+          await loadSessionDetail(target.id);
+        }
+      }
+    } catch (err: any) {
+      setSessionError(err.message || 'Failed to load conversation history.');
+    } finally {
+      setSessionsLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadSessions();
+  }, [user, loadSessions]);
+
+  // Load message thread for a selected session
+  const loadSessionDetail = async (sessionId: string) => {
+    setActiveChatId(sessionId);
+    try {
+      const detail = await fetchChatSessionDetail(sessionId);
+      const mappedMsgs: ChatMessage[] = detail.messages.map((m) => {
+        const statutes = (m.statutory_citations || []).flatMap((s: any) =>
+          (s.sections || []).map((sec: string) => `${sec} (${s.act})`)
+        );
+        return {
+          id: m.id,
+          sender: m.sender,
+          text: m.content,
+          statutes,
+          timestamp: new Date(m.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        };
+      });
+      setMessages(mappedMsgs);
+    } catch (err) {
+      console.error('Failed to load session detail', err);
+    }
+  };
 
   // Handle new chat click
   const handleNewChat = () => {
@@ -114,8 +189,24 @@ export function ChatDashboardPage({
 
   // Select a recent chat session
   const handleSelectSession = (session: ChatSession) => {
-    setActiveChatId(session.id);
-    setMessages(session.messages);
+    loadSessionDetail(session.id);
+  };
+
+  // Delete a specific conversation session
+  const handleDeleteSession = async (sessionId: string) => {
+    setIsDeleting(true);
+    try {
+      await deleteChatSession(sessionId);
+      setRecentChats((prev) => prev.filter((s) => s.id !== sessionId));
+      if (activeChatId === sessionId) {
+        handleNewChat();
+      }
+      setDeleteConfirmSessionId(null);
+    } catch (err) {
+      console.error('Failed to delete session', err);
+    } finally {
+      setIsDeleting(false);
+    }
   };
 
   // Send message
@@ -130,41 +221,45 @@ export function ChatDashboardPage({
       timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
     };
 
-    const currentSessionId = activeChatId || 'chat-' + Date.now();
-    setActiveChatId(currentSessionId);
     setMessages((prev) => [...prev, userMsg]);
     setInputMessage('');
     setIsThinking(true);
 
-    // Update or add session in recentChats
-    setRecentChats((prev) => {
-      const existing = prev.find((s) => s.id === currentSessionId);
-      if (existing) {
-        return prev.map((s) =>
-          s.id === currentSessionId ? { ...s, messages: [...s.messages, userMsg] } : s
-        );
-      }
-      const title = query.length > 28 ? query.slice(0, 28) + '...' : query;
-      return [{ id: currentSessionId, title, messages: [userMsg] }, ...prev];
-    });
-
     try {
-      // Call backend knowledge legal AI service passing current active language
-      const res = await askLegalAssistant(query, language, true);
+      const clientReqId = typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : undefined;
+      const res = await askLegalAssistant(query, language, true, activeChatId, clientReqId);
+
       const assistantMsg: ChatMessage = {
-        id: 'assistant-' + Date.now(),
+        id: res.assistant_message_id || 'assistant-' + Date.now(),
         sender: 'assistant',
-        text: res.explanation || res.advice || 'Statutory remedies retrieved.',
+        text: res.explanation || res.legal_issue || res.advice || 'Statutory remedies retrieved.',
         statutes: res.statutory_references || [],
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
       };
       setMessages((prev) => [...prev, assistantMsg]);
-      setRecentChats((prev) =>
-        prev.map((s) =>
-          s.id === currentSessionId ? { ...s, messages: [...s.messages, assistantMsg] } : s
-        )
-      );
-    } catch {
+
+      // If backend created or returned a session_id, sync it
+      if (res.session_id) {
+        setActiveChatId(res.session_id);
+      }
+
+      // Refresh session list to reflect new/updated conversation
+      const serverSessions = await fetchChatSessions().catch(() => null);
+      if (serverSessions) {
+        setRecentChats(
+          serverSessions.map((s) => ({
+            id: s.id,
+            title: s.title,
+            messages: [],
+          }))
+        );
+      }
+    } catch (err: any) {
+      addToast({
+        title: 'Legal AI Notice',
+        description: err.message || 'Network error communicating with AI. Providing statutory reference guidance.',
+        variant: 'warning',
+      });
       // High-precision fallback response in selected language
       const fallbackMsg: ChatMessage = {
         id: 'assistant-' + Date.now(),
@@ -187,11 +282,6 @@ export function ChatDashboardPage({
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
       };
       setMessages((prev) => [...prev, fallbackMsg]);
-      setRecentChats((prev) =>
-        prev.map((s) =>
-          s.id === currentSessionId ? { ...s, messages: [...s.messages, fallbackMsg] } : s
-        )
-      );
     } finally {
       setIsThinking(false);
     }
@@ -303,13 +393,20 @@ export function ChatDashboardPage({
         {/* 1. Header Row */}
         <div className="h-[76px] px-5 flex items-center justify-between border-b border-white/[0.04]">
           {!sidebarCollapsed ? (
-            <div className="flex items-center gap-3 min-w-0">
-              <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-[#D9A441]/20 to-[#6B4410]/20 border border-[#D9A441]/40 flex items-center justify-center shrink-0 shadow-[0_0_12px_rgba(217,164,65,0.2)]">
+            <div
+              onClick={() => {
+                if (onOpenDashboard) onOpenDashboard();
+                else if (onNavigateHome) onNavigateHome();
+              }}
+              className="flex items-center gap-3 min-w-0 cursor-pointer group"
+              title="Return to Dashboard"
+            >
+              <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-[#D9A441]/20 to-[#6B4410]/20 border border-[#D9A441]/40 flex items-center justify-center shrink-0 shadow-[0_0_12px_rgba(217,164,65,0.2)] group-hover:border-[#F7DE9B] transition-colors">
                 <Scale className="w-4 h-4 text-[#F7DE9B]" />
               </div>
               <div className="truncate">
                 <div className="font-serif font-bold text-[24px] leading-tight flex items-baseline">
-                  <span className="text-[#F5EEDC]">{t('hero.titleLaw', 'Law')}</span>
+                  <span className="text-[#F5EEDC] group-hover:text-white transition-colors">{t('hero.titleLaw', 'Law')}</span>
                   <span className="ml-1.5 bg-gradient-to-r from-[#F7DE9B] via-[#D9A441] to-[#A8731F] bg-clip-text text-transparent">
                     {t('hero.titleMithra', 'Mithra')}
                   </span>
@@ -320,7 +417,14 @@ export function ChatDashboardPage({
               </div>
             </div>
           ) : (
-            <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-[#D9A441]/20 to-[#6B4410]/20 border border-[#D9A441]/40 flex items-center justify-center mx-auto shadow-[0_0_12px_rgba(217,164,65,0.2)]">
+            <div
+              onClick={() => {
+                if (onOpenDashboard) onOpenDashboard();
+                else if (onNavigateHome) onNavigateHome();
+              }}
+              className="w-8 h-8 rounded-lg bg-gradient-to-br from-[#D9A441]/20 to-[#6B4410]/20 border border-[#D9A441]/40 flex items-center justify-center mx-auto shadow-[0_0_12px_rgba(217,164,65,0.2)] cursor-pointer hover:border-[#F7DE9B] transition-colors"
+              title="Return to Dashboard"
+            >
               <Scale className="w-4 h-4 text-[#F7DE9B]" />
             </div>
           )}
@@ -403,12 +507,29 @@ export function ChatDashboardPage({
         {/* 5 & 6. Recent Chats List (Scrollable, Clean user sessions only) */}
         <div className="flex-1 overflow-y-auto px-3 py-1 space-y-1.5 scrollbar-thin scrollbar-thumb-white/10">
           {!sidebarCollapsed && (
-            <p className="px-3 pt-2 pb-1 text-[13px] font-medium text-[#8A8A8A] tracking-wider uppercase">
-              {t('chatDashboard.recentChats', 'Recent Chats')}
-            </p>
+            <div className="flex items-center justify-between px-3 pt-2 pb-1">
+              <p className="text-[13px] font-medium text-[#8A8A8A] tracking-wider uppercase">
+                {t('chatDashboard.recentChats', 'Recent Chats')}
+              </p>
+              {sessionsLoading && <Loader2 className="w-3.5 h-3.5 text-[#D9A441] animate-spin" />}
+            </div>
           )}
 
-          {filteredChats.length === 0 ? (
+          {sessionsLoading && filteredChats.length === 0 ? (
+            !sidebarCollapsed && (
+              <p className="px-3 py-4 text-xs text-[#8A8A8A]/70 flex items-center gap-2 font-sans">
+                <Loader2 className="w-3.5 h-3.5 animate-spin text-[#D9A441]" />
+                Loading conversations...
+              </p>
+            )
+          ) : sessionError && filteredChats.length === 0 ? (
+            !sidebarCollapsed && (
+              <div className="px-3 py-3 text-xs text-red-400 font-sans">
+                <p>{sessionError}</p>
+                <button onClick={() => loadSessions()} className="mt-1 text-[#D9A441] underline">Retry</button>
+              </div>
+            )
+          ) : filteredChats.length === 0 ? (
             !sidebarCollapsed && (
               <p className="px-3 py-4 text-xs text-[#8A8A8A]/50 italic font-sans">
                 {t('chatDashboard.noRecentChats', 'No recent chats')}
@@ -418,25 +539,42 @@ export function ChatDashboardPage({
             filteredChats.map((session) => {
               const isActive = activeChatId === session.id;
               return (
-                <button
+                <div
                   key={session.id}
-                  onClick={() => handleSelectSession(session)}
-                  className={`w-full h-[44px] px-3 rounded-xl flex items-center gap-3.5 transition-all text-left group ${
+                  className={`w-full h-[44px] px-3 rounded-xl flex items-center justify-between transition-all group ${
                     isActive
                       ? 'bg-[#D9A441]/10 text-white border-l-2 border-[#D9A441]'
                       : 'text-white/80 hover:text-white hover:bg-white/[0.04]'
                   }`}
-                  title={session.title}
                 >
-                  <MessageSquare
-                    className={`w-[17px] h-[17px] shrink-0 ${
-                      isActive ? 'text-[#D9A441]' : 'text-white/70 group-hover:text-white'
-                    }`}
-                  />
+                  <button
+                    onClick={() => handleSelectSession(session)}
+                    className="flex items-center gap-3.5 min-w-0 flex-1 text-left"
+                    title={session.title}
+                  >
+                    <MessageSquare
+                      className={`w-[17px] h-[17px] shrink-0 ${
+                        isActive ? 'text-[#D9A441]' : 'text-white/70 group-hover:text-white'
+                      }`}
+                    />
+                    {!sidebarCollapsed && (
+                      <span className="text-[15px] truncate font-normal">{session.title}</span>
+                    )}
+                  </button>
                   {!sidebarCollapsed && (
-                    <span className="text-[15px] truncate font-normal">{session.title}</span>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setDeleteConfirmSessionId(session.id);
+                      }}
+                      className="opacity-0 group-hover:opacity-100 p-1 text-white/40 hover:text-red-400 hover:bg-red-950/30 rounded transition-all shrink-0 ml-1"
+                      title="Delete conversation"
+                      aria-label="Delete conversation"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
                   )}
-                </button>
+                </div>
               );
             })
           )}
@@ -475,6 +613,18 @@ export function ChatDashboardPage({
 
                 {userDropdownOpen && (
                   <div className="absolute bottom-12 right-0 w-52 rounded-xl bg-[#121212] border border-[#D9A441]/30 p-1.5 shadow-[0_8px_30px_rgba(0,0,0,0.8)] z-50">
+                    {onOpenDashboard && (
+                      <button
+                        onClick={() => {
+                          setUserDropdownOpen(false);
+                          onOpenDashboard();
+                        }}
+                        className="w-full px-3 py-2 text-left text-xs text-white/90 hover:bg-[#D9A441]/10 rounded-lg flex items-center gap-2"
+                      >
+                        <FolderLock className="w-4 h-4 text-[#D9A441]" />
+                        {t('nav.dashboard', 'Cases & Vault Dashboard')}
+                      </button>
+                    )}
                     <button
                       onClick={() => {
                         setUserDropdownOpen(false);
@@ -584,13 +734,31 @@ export function ChatDashboardPage({
 
         {/* Top-Right Header (Language Selector + User Avatar) */}
         <div className="relative z-40 h-[76px] px-6 sm:px-8 flex items-center justify-between md:justify-end gap-4 shrink-0">
-          {/* Mobile hamburger */}
-          <button
-            onClick={() => setMobileDrawerOpen(true)}
-            className="md:hidden p-2 rounded-lg text-white/80 hover:text-white bg-white/[0.04]"
-          >
-            <PanelLeft className="w-5 h-5" />
-          </button>
+          {/* Mobile hamburger & brand */}
+          <div className="flex md:hidden items-center gap-2.5">
+            <button
+              onClick={() => setMobileDrawerOpen(true)}
+              className="p-2 rounded-lg text-white/80 hover:text-white bg-white/[0.04] cursor-pointer"
+              title="Open Navigation"
+            >
+              <PanelLeft className="w-5 h-5" />
+            </button>
+            <div
+              onClick={() => {
+                if (onOpenDashboard) onOpenDashboard();
+                else if (onNavigateHome) onNavigateHome();
+              }}
+              className="flex items-center gap-1.5 cursor-pointer"
+              title="Return to Dashboard"
+            >
+              <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-[#D9A441]/20 to-[#6B4410]/20 border border-[#D9A441]/40 flex items-center justify-center shrink-0">
+                <Scale className="w-3.5 h-3.5 text-[#F7DE9B]" />
+              </div>
+              <span className="font-serif font-bold text-base text-[#F5EEDC]">
+                Law <span className="bg-gradient-to-r from-[#F7DE9B] to-[#D9A441] bg-clip-text text-transparent">Mithra</span>
+              </span>
+            </div>
+          </div>
 
           <div className="flex items-center gap-4">
             {/* Pill-shaped Language Selector */}
@@ -1004,26 +1172,41 @@ export function ChatDashboardPage({
               </div>
 
               <div className="flex-1 overflow-y-auto px-4 space-y-2">
-                <p className="text-xs text-white/50 uppercase tracking-wider font-semibold">
-                  {t('chatDashboard.recentChats', 'Recent Chats')}
-                </p>
+                <div className="flex items-center justify-between">
+                  <p className="text-xs text-white/50 uppercase tracking-wider font-semibold">
+                    {t('chatDashboard.recentChats', 'Recent Chats')}
+                  </p>
+                  {sessionsLoading && <Loader2 className="w-3.5 h-3.5 text-[#D9A441] animate-spin" />}
+                </div>
                 {filteredChats.length === 0 ? (
                   <p className="py-4 text-xs text-white/40 italic">
                     {t('chatDashboard.noRecentChats', 'No recent chats')}
                   </p>
                 ) : (
                   filteredChats.map((session) => (
-                    <button
+                    <div
                       key={session.id}
-                      onClick={() => {
-                        handleSelectSession(session);
-                        setMobileDrawerOpen(false);
-                      }}
-                      className="w-full py-2.5 px-3 rounded-lg text-left text-sm text-white/80 hover:bg-white/[0.05] flex items-center gap-3"
+                      className="w-full py-2.5 px-3 rounded-lg text-left text-sm text-white/80 hover:bg-white/[0.05] flex items-center justify-between gap-3"
                     >
-                      <MessageSquare className="w-4 h-4 text-[#D9A441]" />
-                      <span className="truncate">{session.title}</span>
-                    </button>
+                      <button
+                        onClick={() => {
+                          handleSelectSession(session);
+                          setMobileDrawerOpen(false);
+                        }}
+                        className="flex items-center gap-3 min-w-0 flex-1 text-left"
+                      >
+                        <MessageSquare className="w-4 h-4 text-[#D9A441] shrink-0" />
+                        <span className="truncate">{session.title}</span>
+                      </button>
+                      <button
+                        onClick={() => setDeleteConfirmSessionId(session.id)}
+                        className="p-1 text-white/40 hover:text-red-400"
+                        title="Delete conversation"
+                        aria-label="Delete conversation"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
                   ))
                 )}
               </div>
@@ -1054,6 +1237,38 @@ export function ChatDashboardPage({
           </>
         )}
       </AnimatePresence>
+
+      {/* Delete Confirmation Modal */}
+      {deleteConfirmSessionId && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm p-4">
+          <div className="w-full max-w-sm rounded-2xl bg-[#141414] border border-[#D9A441]/40 p-6 shadow-2xl">
+            <div className="flex items-center gap-3 text-amber-400 mb-3">
+              <AlertTriangle className="w-5 h-5 shrink-0" />
+              <h3 className="font-semibold text-base text-white">Delete Conversation?</h3>
+            </div>
+            <p className="text-sm text-white/70 mb-5">
+              This conversation thread and all its legal advice turns will be permanently removed. This action cannot be undone.
+            </p>
+            <div className="flex justify-end gap-3">
+              <button
+                onClick={() => setDeleteConfirmSessionId(null)}
+                disabled={isDeleting}
+                className="px-4 py-2 rounded-xl text-sm font-medium text-white/80 hover:bg-white/10 transition-colors cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => handleDeleteSession(deleteConfirmSessionId)}
+                disabled={isDeleting}
+                className="px-4 py-2 rounded-xl text-sm font-semibold bg-red-600 hover:bg-red-500 text-white transition-colors flex items-center gap-2 cursor-pointer"
+              >
+                {isDeleting && <Loader2 className="w-4 h-4 animate-spin" />}
+                Delete
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -24,7 +24,8 @@
     "titleMithra": "Mithra",
     "ctaUpload": "Upload Legal Notice",
     "ctaVault": "Access Private Vault",
-    "ctaChat": "Ask Legal AI in Your Language"
+    "ctaChat": "Ask Legal AI in Your Language",
+    "consultAI": "Consult Legal AI"
   },
   "explainer": {
     "step1Title": "Upload Document",
@@ -48,7 +49,7 @@
     "welcomeBack": "Welcome Back",
     "subtitle": "Login to continue your legal journey",
     "emailLabel": "Email Address",
-    "emailPlaceholder": "First Email",
+    "emailPlaceholder": "your.email@example.com",
     "passwordLabel": "Password",
     "passwordPlaceholder": "Password",
     "button": "Login",

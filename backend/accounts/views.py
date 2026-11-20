@@ -1,5 +1,6 @@
 import logging
 from django.conf import settings
+from django.db import IntegrityError
 from django.contrib.auth import authenticate
 from rest_framework import status
 from rest_framework.views import APIView
@@ -64,7 +65,14 @@ class RegisterView(APIView):
             logger.warning("event=auth.register.failed reason=validation_error")
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
-        user = serializer.save()
+        try:
+            user = serializer.save()
+        except IntegrityError:
+            logger.warning("event=auth.register.failed reason=integrity_error")
+            return Response(
+                {"email": ["An account with this email address already exists."]},
+                status=status.HTTP_400_BAD_REQUEST
+            )
         logger.info(f"event=auth.register.success user_id={user.id}")
 
         refresh = RefreshToken.for_user(user)
@@ -141,9 +149,20 @@ class RefreshTokenView(APIView):
 
         try:
             old_refresh = RefreshToken(token_str)
-            # Create a new refresh token (rotation)
             user_id = old_refresh.payload.get('user_id')
-            new_access_token = str(old_refresh.access_token)
+
+            from django.contrib.auth.models import User
+            try:
+                user = User.objects.get(id=user_id)
+            except User.DoesNotExist:
+                response = Response({'detail': 'User account no longer exists.'}, status=status.HTTP_401_UNAUTHORIZED)
+                clear_refresh_cookie(response)
+                return response
+
+            if not user.is_active:
+                response = Response({'detail': 'Account is disabled.'}, status=status.HTTP_401_UNAUTHORIZED)
+                clear_refresh_cookie(response)
+                return response
 
             # Blacklist old refresh token
             try:
@@ -152,8 +171,6 @@ class RefreshTokenView(APIView):
                 pass
 
             # Create fresh rotating token for user
-            from django.contrib.auth.models import User
-            user = User.objects.get(id=user_id)
             new_refresh = RefreshToken.for_user(user)
 
             response = Response({
@@ -288,7 +305,15 @@ class ChangePasswordView(APIView):
         user.set_password(new_password)
         user.save()
         logger.info(f"event=auth.password.changed user_id={user.id}")
-        return Response({'detail': 'Password successfully changed.'}, status=status.HTTP_200_OK)
+
+        refresh = RefreshToken.for_user(user)
+        response = Response({
+            'detail': 'Password successfully changed.',
+            'access': str(refresh.access_token),
+            'refresh': str(refresh),
+        }, status=status.HTTP_200_OK)
+        set_refresh_cookie(response, str(refresh))
+        return response
 
 
 class DeleteAccountView(APIView):

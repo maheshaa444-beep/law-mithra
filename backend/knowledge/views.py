@@ -7,12 +7,20 @@ Endpoints:
 - POST /api/knowledge/translate/  (Statutory-guarded translation)
 """
 
+import hashlib
+import secrets
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.permissions import AllowAny
 from drf_spectacular.utils import extend_schema, OpenApiParameter, OpenApiTypes
 
+from .models import ChatSession, ChatMessage
+from .serializers import (
+    ChatSessionListSerializer,
+    ChatSessionDetailSerializer,
+    ChatMessageSerializer,
+)
 from .services.language_detector import SUPPORTED_LANGUAGES, detect_language
 from .services.statutory_guard import StatutoryGuard
 from .services.terminology import get_all_terms_for_language
@@ -20,6 +28,114 @@ from .services.legal_ai_service import LegalAIService
 from .services.gemini_client import GeminiClient
 
 legal_ai_service = LegalAIService()
+
+
+def get_session_queryset(request):
+    """
+    Returns queryset of ChatSessions belonging to the current authenticated user or guest.
+    Validates ownership on every access to enforce privacy and isolation.
+    """
+    if request.user and request.user.is_authenticated:
+        return ChatSession.objects.filter(user=request.user)
+
+    guest_secret = request.headers.get('X-Guest-Secret') or request.query_params.get('guest_secret')
+    if guest_secret:
+        secret_hash = hashlib.sha256(guest_secret.strip().encode('utf-8')).hexdigest()
+        return ChatSession.objects.filter(user__isnull=True, guest_secret_hash=secret_hash)
+
+    return ChatSession.objects.none()
+
+
+class ChatSessionListView(APIView):
+    """
+    List and create legal chat sessions.
+    Authenticated users see their private history; guests can track via high-entropy secret.
+    """
+    permission_classes = [AllowAny]
+
+    @extend_schema(
+        summary="List Chat Sessions",
+        description="Returns list of conversation sessions belonging to the authenticated user.",
+        responses={200: ChatSessionListSerializer(many=True)}
+    )
+    def get(self, request):
+        qs = get_session_queryset(request).order_by('-updated_at')
+        serializer = ChatSessionListSerializer(qs, many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+    @extend_schema(
+        summary="Create Chat Session",
+        description="Creates a new conversation thread with distinct identity.",
+        responses={201: ChatSessionDetailSerializer}
+    )
+    def post(self, request):
+        title = str(request.data.get('title', 'New Legal Inquiry')).strip() or 'New Legal Inquiry'
+        case_role = request.data.get('case_role', ChatSession.Role.NEUTRAL)
+        preferred_language = request.data.get('preferred_language', 'en')
+
+        if request.user and request.user.is_authenticated:
+            session = ChatSession.objects.create(
+                user=request.user,
+                title=title[:255],
+                case_role=case_role,
+                preferred_language=preferred_language
+            )
+            serializer = ChatSessionDetailSerializer(session)
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+        else:
+            raw_secret = secrets.token_urlsafe(32)
+            secret_hash = hashlib.sha256(raw_secret.encode('utf-8')).hexdigest()
+            session = ChatSession.objects.create(
+                user=None,
+                guest_secret_hash=secret_hash,
+                title=title[:255],
+                case_role=case_role,
+                preferred_language=preferred_language
+            )
+            data = ChatSessionDetailSerializer(session).data
+            data['guest_secret'] = raw_secret
+            return Response(data, status=status.HTTP_201_CREATED)
+
+
+class ChatSessionDetailView(APIView):
+    """
+    Retrieve or delete an individual chat session.
+    Strictly verifies ownership so users can never access or delete another user's session.
+    """
+    permission_classes = [AllowAny]
+
+    @extend_schema(
+        summary="Get Chat Session Detail",
+        description="Retrieves session with chronologically ordered message thread.",
+        responses={200: ChatSessionDetailSerializer}
+    )
+    def get(self, request, session_id):
+        session = get_session_queryset(request).filter(id=session_id).first()
+        if not session:
+            return Response(
+                {"error": "Chat session not found or access denied."},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        serializer = ChatSessionDetailSerializer(session)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+    @extend_schema(
+        summary="Delete Chat Session",
+        description="Deletes a specific chat session without affecting others.",
+        responses={200: OpenApiTypes.OBJECT}
+    )
+    def delete(self, request, session_id):
+        session = get_session_queryset(request).filter(id=session_id).first()
+        if not session:
+            return Response(
+                {"error": "Chat session not found or access denied."},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        session.delete()
+        return Response(
+            {"detail": "Chat session deleted successfully."},
+            status=status.HTTP_200_OK
+        )
 
 
 class CaseAnalysisView(APIView):
@@ -78,6 +194,66 @@ class LegalChatView(APIView):
             user_lang = request.data.get('preferred_language', 'en')
 
         auto_detect = request.data.get('auto_detect_language', True)
+        session_id = request.data.get('session_id')
+        client_request_id = request.data.get('client_request_id')
+
+        # Resolve or create the ChatSession
+        session = None
+        if session_id:
+            session = get_session_queryset(request).filter(id=session_id).first()
+            if not session:
+                return Response(
+                    {"error": "Chat session not found or access denied."},
+                    status=status.HTTP_404_NOT_FOUND
+                )
+        else:
+            title = query_text[:35] + ('...' if len(query_text) > 35 else '')
+            if request.user and request.user.is_authenticated:
+                session = ChatSession.objects.create(
+                    user=request.user,
+                    title=title,
+                    preferred_language=user_lang
+                )
+            else:
+                raw_secret = secrets.token_urlsafe(32)
+                secret_hash = hashlib.sha256(raw_secret.encode('utf-8')).hexdigest()
+                session = ChatSession.objects.create(
+                    user=None,
+                    guest_secret_hash=secret_hash,
+                    title=title,
+                    preferred_language=user_lang
+                )
+
+        # Idempotency check: if client_request_id already saved, return replayed response
+        if client_request_id:
+            existing_user_msg = ChatMessage.objects.filter(session=session, client_request_id=client_request_id).first()
+            if existing_user_msg:
+                asst_msg = ChatMessage.objects.filter(session=session, sequence_number=existing_user_msg.sequence_number + 1).first()
+                if asst_msg:
+                    return Response({
+                        'legal_issue': asst_msg.content,
+                        'explanation': asst_msg.content,
+                        'applicable_sections': asst_msg.statutory_citations,
+                        'remedies': asst_msg.metadata.get('remedies', []),
+                        'detected_language': asst_msg.metadata.get('detected_language', user_lang),
+                        'session_id': str(session.id),
+                        'session_title': session.title,
+                        'idempotent_replay': True,
+                    }, status=status.HTTP_200_OK)
+
+        # Determine sequence number for user message
+        last_msg = session.messages.order_by('-sequence_number').first()
+        next_seq = (last_msg.sequence_number + 1) if last_msg else 1
+
+        # Save user turn
+        user_msg = ChatMessage.objects.create(
+            session=session,
+            sequence_number=next_seq,
+            client_request_id=client_request_id if client_request_id else None,
+            sender=ChatMessage.Sender.USER,
+            content=query_text,
+            metadata={'preferred_language': user_lang}
+        )
 
         try:
             result = legal_ai_service.process_query(
@@ -85,6 +261,33 @@ class LegalChatView(APIView):
                 preferred_lang=user_lang,
                 auto_detect_lang=auto_detect
             )
+
+            # Save assistant turn
+            asst_content = result.get('legal_issue') or result.get('explanation') or 'Statutory remedies retrieved.'
+            asst_msg = ChatMessage.objects.create(
+                session=session,
+                sequence_number=next_seq + 1,
+                sender=ChatMessage.Sender.ASSISTANT,
+                content=asst_content,
+                statutory_citations=result.get('applicable_sections', []),
+                metadata={
+                    'detected_language': result.get('detected_language', user_lang),
+                    'confidence': result.get('confidence', 0.95),
+                    'remedies': result.get('remedies', []),
+                }
+            )
+
+            # Update session timestamp and title if it was initial
+            if session.title == "New Legal Inquiry" or session.messages.count() <= 2:
+                session.title = query_text[:35] + ('...' if len(query_text) > 35 else '')
+            session.save()
+
+            # Include session metadata in response
+            result['session_id'] = str(session.id)
+            result['session_title'] = session.title
+            result['user_message_id'] = str(user_msg.id)
+            result['assistant_message_id'] = str(asst_msg.id)
+
             return Response(result, status=status.HTTP_200_OK)
         except Exception as e:
             return Response(

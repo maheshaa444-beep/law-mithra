@@ -139,8 +139,8 @@ function MainLayout() {
     );
   }
 
-  // Protected: When on dashboard or chat, user MUST be logged in. If signed out, redirect to landing!
-  if ((currentView === 'dashboard' || currentView === 'chat') && !selectedDocumentId) {
+  // Protected: When on chat view, render the dedicated ChatDashboardPage
+  if (currentView === 'chat' && !selectedDocumentId) {
     if (!user) {
       return (
         <Hero
@@ -164,6 +164,8 @@ function MainLayout() {
         <ChatDashboardPage
           onOpenUpload={handleOpenUpload}
           onOpenVault={handleOpenVault}
+          onOpenDashboard={() => setCurrentView('dashboard')}
+          onNavigateHome={() => setCurrentView('landing')}
           onOpenSettings={() => setCurrentView('settings')}
           onLogout={handleDashboardLogout}
         />
@@ -229,7 +231,7 @@ function MainLayout() {
             onSelectDocument={(id) => setSelectedDocumentId(id)}
           />
         ) : currentView === 'settings' && user ? (
-          <SettingsPage />
+          <SettingsPage onBack={() => setCurrentView('dashboard')} />
         ) : (
           <Hero
             onLoginClick={() => setCurrentView(user ? 'dashboard' : 'login')}

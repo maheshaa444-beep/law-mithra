@@ -511,6 +511,24 @@ export function Hero({ onLoginClick, isLoggedIn }: HeroProps) {
             </span>
             <span className="h-[1px] w-5 sm:w-8 bg-gradient-to-l from-transparent to-[#D9A441]/70" />
           </motion.div>
+
+          {/* Primary Call-to-Action Button */}
+          <motion.div
+            initial={{ opacity: 0, y: 15 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.6, delay: 0.62, ease: 'easeOut' }}
+            className="mt-6 sm:mt-7 flex items-center gap-3.5 z-30"
+          >
+            <motion.button
+              whileHover={{ y: -2, scale: 1.03 }}
+              whileTap={{ scale: 0.97 }}
+              onClick={onLoginClick}
+              className="group relative inline-flex items-center gap-2.5 px-6 sm:px-7 py-3 sm:py-3.5 rounded-full bg-gradient-to-r from-[#C9953A] via-[#F2D488] to-[#C9953A] text-[#111] font-sans font-bold text-sm sm:text-base shadow-[0_0_24px_rgba(217,164,65,0.35)] hover:shadow-[0_0_35px_rgba(242,212,136,0.55)] transition-all duration-300 cursor-pointer"
+            >
+              <span>{isLoggedIn ? t('common.dashboard', 'Open Legal Dashboard') : t('hero.consultAI', 'Consult Legal AI')}</span>
+              <ChevronRight className="w-4 h-4 stroke-[2.5] text-[#111] group-hover:translate-x-1 transition-transform" />
+            </motion.button>
+          </motion.div>
         </div>
 
         {/* =====================================================================

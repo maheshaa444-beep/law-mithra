@@ -1,3 +1,4 @@
+from django.db import models
 from django.contrib.auth.models import User
 from django.contrib.auth.password_validation import validate_password
 from rest_framework import serializers
@@ -41,7 +42,9 @@ class UserRegistrationSerializer(serializers.Serializer):
 
     def validate_email(self, value):
         normalized_email = value.strip().lower()
-        if User.objects.filter(email__iexact=normalized_email).exists():
+        if User.objects.filter(
+            models.Q(email__iexact=normalized_email) | models.Q(username__iexact=normalized_email)
+        ).exists():
             raise serializers.ValidationError("An account with this email address already exists.")
         return normalized_email
 
@@ -92,25 +95,39 @@ class UserRegistrationSerializer(serializers.Serializer):
 
 
 class UserLoginSerializer(serializers.Serializer):
-    email = serializers.EmailField(required=True)
+    email = serializers.CharField(required=True, max_length=254)
     password = serializers.CharField(write_only=True, required=True, style={'input_type': 'password'})
 
     def validate(self, attrs):
-        email = attrs.get('email', '').strip().lower()
+        raw_credential = attrs.get('email', '').strip()
+        normalized_credential = raw_credential.lower()
         password = attrs.get('password', '')
 
-        try:
-            user = User.objects.get(email__iexact=email)
-        except User.DoesNotExist:
+        # Query users matching by normalized email, normalized username, or raw credential
+        candidates = list(
+            User.objects.filter(
+                models.Q(email__iexact=normalized_credential) |
+                models.Q(username__iexact=normalized_credential) |
+                models.Q(username__iexact=raw_credential)
+            ).order_by('id')
+        )
+
+        if not candidates:
             raise serializers.ValidationError("Invalid email or password.")
 
-        if not user.check_password(password):
+        authenticated_user = None
+        for candidate in candidates:
+            if candidate.check_password(password):
+                authenticated_user = candidate
+                break
+
+        if not authenticated_user:
             raise serializers.ValidationError("Invalid email or password.")
 
-        if not user.is_active:
+        if not authenticated_user.is_active:
             raise serializers.ValidationError("Account is disabled.")
 
-        attrs['user'] = user
+        attrs['user'] = authenticated_user
         return attrs
 
 
@@ -119,8 +136,18 @@ class ChangePasswordSerializer(serializers.Serializer):
     new_password = serializers.CharField(required=True, write_only=True)
 
     def validate_new_password(self, value):
-        validate_password(value, self.context.get('request').user)
+        user = self.context.get('request').user if self.context.get('request') else None
+        validate_password(value, user)
         return value
+
+    def validate(self, attrs):
+        current_password = attrs.get('current_password')
+        new_password = attrs.get('new_password')
+        if current_password and new_password and current_password == new_password:
+            raise serializers.ValidationError(
+                {"new_password": ["New password must be different from current password."]}
+            )
+        return attrs
 
 
 class AccountDeletionSerializer(serializers.Serializer):

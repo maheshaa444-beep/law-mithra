@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { motion, useMotionValue, useSpring, useTransform } from 'framer-motion';
-import { User, Mail, Lock, ShieldCheck, Eye, EyeOff, Globe2, Loader2, ArrowRight, AlertCircle } from 'lucide-react';
+import { User, Mail, Lock, ShieldCheck, Eye, EyeOff, Globe2, Loader2, ArrowRight, AlertCircle, ArrowLeft } from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
 import { useToast } from '@/components/ui/Toast';
 import { useLanguage } from '@/context/LanguageContext';
@@ -12,17 +12,6 @@ interface SignupPageProps {
   onSignupSuccess: () => void;
   onNavigateHome?: () => void;
 }
-
-const LANGUAGES = [
-  { code: 'en', label: 'English' },
-  { code: 'kn', label: 'ಕನ್ನಡ (Kannada)' },
-  { code: 'hi', label: 'हिन्दी (Hindi)' },
-  { code: 'te', label: 'తెలుగు (Telugu)' },
-  { code: 'ta', label: 'தமிழ் (Tamil)' },
-  { code: 'ml', label: 'മലയാളം (Malayalam)' },
-  { code: 'mr', label: 'मराठी (Marathi)' },
-  { code: 'bn', label: 'বাংলা (Bengali)' },
-];
 
 export function SignupPage({ onNavigateLogin, onSignupSuccess, onNavigateHome }: SignupPageProps) {
   const { register } = useAuth();
@@ -285,6 +274,20 @@ export function SignupPage({ onNavigateLogin, onSignupSuccess, onNavigateHome }:
         </div>
       </motion.div>
 
+      {/* Top Header: Back to Home & Language Switcher */}
+      {onNavigateHome && (
+        <div className="absolute top-5 sm:top-7 left-5 sm:right-auto sm:left-8 lg:left-12 z-50">
+          <button
+            type="button"
+            onClick={onNavigateHome}
+            className="group inline-flex items-center gap-2 px-3.5 py-2 rounded-full border border-[#D9A441]/50 hover:border-[#F7DE9B] bg-[#0A0A0A]/85 hover:bg-[#14120D] text-white/90 hover:text-white text-xs font-sans transition-all cursor-pointer backdrop-blur-md"
+          >
+            <ArrowLeft className="w-3.5 h-3.5 text-[#D9A441] group-hover:-translate-x-0.5 transition-transform" />
+            <span>Back to Home</span>
+          </button>
+        </div>
+      )}
+
       {/* Top-Right Language Switcher */}
       <div className="absolute top-5 sm:top-7 right-5 sm:right-8 lg:right-12 z-50">
         <GoldLanguageSwitch />
@@ -432,7 +435,7 @@ export function SignupPage({ onNavigateLogin, onSignupSuccess, onNavigateHome }:
         >
           {/* Card Glass Container */}
           <div className="relative rounded-[26px] bg-[rgba(10,10,10,0.85)] backdrop-blur-md border border-[#C8963E] p-6 sm:p-7 lg:p-8 shadow-[0_0_35px_rgba(200,150,62,0.18)]">
-            
+
             {/* Bright gold light highlight at center of TOP edge */}
             <motion.div
               animate={{ opacity: [0.75, 1, 0.75], scaleX: [0.92, 1.08, 0.92] }}

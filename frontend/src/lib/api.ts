@@ -148,6 +148,11 @@ export async function registerUser(data: {
 
   const result: AuthResponse = await res.json();
   setAccessToken(result.access);
+  if (result.refresh) {
+    try {
+      sessionStorage.setItem('law-mithra-refresh-token', result.refresh);
+    } catch {}
+  }
   return result;
 }
 
@@ -178,25 +183,45 @@ export async function loginUser(data: {
 
   const result: AuthResponse = await res.json();
   setAccessToken(result.access);
+  if (result.refresh) {
+    try {
+      sessionStorage.setItem('law-mithra-refresh-token', result.refresh);
+    } catch {}
+  }
   return result;
 }
 
 export async function refreshAuthToken(): Promise<string | null> {
   try {
+    let storedRefresh: string | null = null;
+    try {
+      storedRefresh = sessionStorage.getItem('law-mithra-refresh-token');
+    } catch {}
+
+    const payload = storedRefresh ? { refresh: storedRefresh } : {};
     const res = await fetch('/api/auth/refresh/', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
       credentials: 'include',
     });
 
     if (!res.ok) {
       setAccessToken(null);
+      try {
+        sessionStorage.removeItem('law-mithra-refresh-token');
+      } catch {}
       return null;
     }
 
     const data = await res.json();
     if (data.access) {
       setAccessToken(data.access);
+      if (data.refresh) {
+        try {
+          sessionStorage.setItem('law-mithra-refresh-token', data.refresh);
+        } catch {}
+      }
       return data.access;
     }
     return null;
@@ -208,13 +233,23 @@ export async function refreshAuthToken(): Promise<string | null> {
 
 export async function logoutUser(): Promise<void> {
   try {
+    let storedRefresh: string | null = null;
+    try {
+      storedRefresh = sessionStorage.getItem('law-mithra-refresh-token');
+    } catch {}
+
+    const payload = storedRefresh ? { refresh: storedRefresh } : {};
     await fetch('/api/auth/logout/', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
       credentials: 'include',
     });
   } finally {
     setAccessToken(null);
+    try {
+      sessionStorage.removeItem('law-mithra-refresh-token');
+    } catch {}
   }
 }
 
@@ -256,6 +291,16 @@ export async function changeUserPassword(data: { current_password: string; new_p
       errorData.detail ||
       'Failed to change password.';
     throw new Error(message);
+  }
+
+  const result = await res.json().catch(() => ({}));
+  if (result.access) {
+    setAccessToken(result.access);
+  }
+  if (result.refresh) {
+    try {
+      sessionStorage.setItem('law-mithra-refresh-token', result.refresh);
+    } catch {}
   }
 }
 
@@ -543,7 +588,10 @@ export async function fetchReportList(documentId: string): Promise<ReportListRes
 /** Trigger authenticated PDF download via blob */
 export async function downloadReportPDF(documentId: string, reportDbId: string): Promise<void> {
   const res = await apiFetch(`/api/documents/${documentId}/reports/${reportDbId}/pdf/`);
-  if (!res.ok) return;
+  if (!res.ok) {
+    const errorData = await res.json().catch(() => ({}));
+    throw new Error(errorData.detail || errorData.error || `Failed to download PDF (${res.status})`);
+  }
   const blob = await res.blob();
   const blobUrl = URL.createObjectURL(blob);
   const a = window.document.createElement('a');
@@ -555,19 +603,98 @@ export async function downloadReportPDF(documentId: string, reportDbId: string):
   URL.revokeObjectURL(blobUrl);
 }
 
+/* ================= Chat & Conversation Session API ================= */
+
+export interface ChatMessageItem {
+  id: string;
+  sequence_number: number;
+  client_request_id?: string;
+  sender: 'user' | 'assistant';
+  content: string;
+  statutory_citations?: any[];
+  metadata?: Record<string, any>;
+  created_at: string;
+}
+
+export interface ChatSessionListItem {
+  id: string;
+  title: string;
+  case_role: string;
+  preferred_language: string;
+  message_count: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ChatSessionDetail extends ChatSessionListItem {
+  messages: ChatMessageItem[];
+}
+
+export async function fetchChatSessions(): Promise<ChatSessionListItem[]> {
+  const res = await apiFetch('/api/knowledge/sessions/');
+  if (!res.ok) {
+    throw new Error('Failed to load conversation history');
+  }
+  return res.json();
+}
+
+export async function fetchChatSessionDetail(sessionId: string): Promise<ChatSessionDetail> {
+  const res = await apiFetch(`/api/knowledge/sessions/${sessionId}/`);
+  if (!res.ok) {
+    throw new Error('Failed to load conversation thread');
+  }
+  return res.json();
+}
+
+export async function createChatSession(data: {
+  title?: string;
+  preferred_language?: string;
+  case_role?: string;
+} = {}): Promise<ChatSessionDetail> {
+  const res = await apiFetch('/api/knowledge/sessions/', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  });
+  if (!res.ok) {
+    throw new Error('Failed to create new chat session');
+  }
+  return res.json();
+}
+
+export async function deleteChatSession(sessionId: string): Promise<void> {
+  const res = await apiFetch(`/api/knowledge/sessions/${sessionId}/`, {
+    method: 'DELETE',
+  });
+  if (!res.ok) {
+    throw new Error('Failed to delete chat session');
+  }
+}
+
 export async function askLegalAssistant(
   query: string,
   preferredLanguage: string = 'en',
-  autoDetect: boolean = true
-): Promise<LegalAssistantResponse> {
+  autoDetect: boolean = true,
+  sessionId?: string | null,
+  clientRequestId?: string | null
+): Promise<LegalAssistantResponse & {
+  session_id?: string;
+  session_title?: string;
+  assistant_message_id?: string;
+  user_message_id?: string;
+}> {
+  const payload: Record<string, any> = {
+    query,
+    preferred_language: preferredLanguage,
+    auto_detect_language: autoDetect,
+  };
+  if (sessionId) payload.session_id = sessionId;
+  if (clientRequestId) payload.client_request_id = clientRequestId;
+
   const res = await apiFetch('/api/knowledge/chat/', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      query,
-      preferred_language: preferredLanguage,
-      auto_detect_language: autoDetect,
-    }),
+    body: JSON.stringify(payload),
   });
 
   if (!res.ok) {
@@ -582,7 +709,7 @@ export async function askLegalAssistant(
 
   return {
     ...data,
-    explanation: data.legal_issue,
+    explanation: data.legal_issue || data.explanation,
     statutory_references: statutes,
   };
 }

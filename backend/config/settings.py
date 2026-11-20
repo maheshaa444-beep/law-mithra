@@ -97,7 +97,6 @@ ASGI_APPLICATION = 'config.asgi.application'
 # Falls back to local SQLite if DATABASE_URL is not set.
 # When running unit tests with pytest, uses fast in-memory SQLite.
 import sys
-import socket
 
 if 'pytest' in sys.modules or any('pytest' in arg for arg in sys.argv):
     DATABASES = {
@@ -106,27 +105,17 @@ if 'pytest' in sys.modules or any('pytest' in arg for arg in sys.argv):
             'NAME': ':memory:',
         }
     }
+elif env.bool('USE_SQLITE', default=True):
+    DATABASES = {
+        'default': {
+            'ENGINE': 'django.db.backends.sqlite3',
+            'NAME': BASE_DIR / 'db.sqlite3',
+        }
+    }
 else:
-    default_db = env.db(
-        'DATABASE_URL',
-        default=f"sqlite:///{BASE_DIR / 'db.sqlite3'}"
-    )
-    # If pointed to local postgres on localhost but no service is listening, fall back to SQLite
-    if default_db.get('ENGINE') == 'django.db.backends.postgresql' and default_db.get('HOST') in ('localhost', '127.0.0.1'):
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.settimeout(0.3)
-        port = int(default_db.get('PORT') or 5432)
-        try:
-            sock.connect(('127.0.0.1', port))
-            sock.close()
-        except (socket.error, ConnectionRefusedError):
-            print(f"[Law Mithra Notice] PostgreSQL is not running on 127.0.0.1:{port}. Falling back to local SQLite for development.")
-            default_db = {
-                'ENGINE': 'django.db.backends.sqlite3',
-                'NAME': BASE_DIR / 'db.sqlite3',
-            }
-    DATABASES = {'default': default_db}
-
+    DATABASES = {
+        'default': env.db('DATABASE_URL')
+    }
 
 # Password validation
 # https://docs.djangoproject.com/en/5.0/ref/settings/#auth-password-validators
@@ -235,3 +224,44 @@ SPECTACULAR_SETTINGS = {
     },
 }
 
+# Production Security Settings (activated when DEBUG is False or explicitly configured)
+if not DEBUG:
+    SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+    SECURE_SSL_REDIRECT = env.bool('SECURE_SSL_REDIRECT', default=False)
+    SESSION_COOKIE_SECURE = env.bool('SESSION_COOKIE_SECURE', default=True)
+    CSRF_COOKIE_SECURE = env.bool('CSRF_COOKIE_SECURE', default=True)
+    SECURE_BROWSER_XSS_FILTER = True
+    SECURE_CONTENT_TYPE_NOSNIFF = True
+    X_FRAME_OPTIONS = 'DENY'
+    SECURE_HSTS_SECONDS = env.int('SECURE_HSTS_SECONDS', default=0)
+    SECURE_HSTS_INCLUDE_SUBDOMAINS = env.bool('SECURE_HSTS_INCLUDE_SUBDOMAINS', default=False)
+    SECURE_HSTS_PRELOAD = env.bool('SECURE_HSTS_PRELOAD', default=False)
+
+# Logging Configuration
+LOGGING = {
+    'version': 1,
+    'disable_existing_loggers': False,
+    'formatters': {
+        'verbose': {
+            'format': '[{asctime}] {levelname} [{name}:{lineno}] {message}',
+            'style': '{',
+        },
+    },
+    'handlers': {
+        'console': {
+            'class': 'logging.StreamHandler',
+            'formatter': 'verbose',
+        },
+    },
+    'root': {
+        'handlers': ['console'],
+        'level': env('LOG_LEVEL', default='INFO'),
+    },
+    'loggers': {
+        'django': {
+            'handlers': ['console'],
+            'level': env('DJANGO_LOG_LEVEL', default='INFO'),
+            'propagate': False,
+        },
+    },
+}

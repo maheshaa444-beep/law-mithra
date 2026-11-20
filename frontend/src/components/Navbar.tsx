@@ -12,7 +12,9 @@ import {
   Settings,
   LogOut,
   User,
-  Sparkles
+  Sparkles,
+  Menu,
+  X
 } from 'lucide-react';
 import { LanguageSelector } from './LanguageSelector';
 import { ApiStatusBadge } from './ApiStatusBadge';
@@ -44,6 +46,7 @@ export function Navbar({
   const { addToast } = useToast();
   const { t } = useLanguage();
   const [showUserDropdown, setShowUserDropdown] = useState(false);
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   const handleProtectedAction = (action: () => void) => {
     if (!user) {
@@ -268,8 +271,158 @@ export function Navbar({
           >
             {darkMode ? <Sun className="w-4 h-4 text-gold-400" /> : <Moon className="w-4 h-4 text-navy-800" />}
           </button>
+
+          {/* Mobile Navigation Hamburger */}
+          <button
+            onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
+            className="md:hidden p-2 rounded-xl text-slate-600 dark:text-slate-300 hover:bg-navy-900/5 dark:hover:bg-charcoal-300 transition-colors border border-navy-900/10 dark:border-charcoal-100 cursor-pointer"
+            aria-label="Toggle navigation menu"
+          >
+            {mobileMenuOpen ? <X className="w-4 h-4 text-gold-500" /> : <Menu className="w-4 h-4 text-navy-800 dark:text-slate-200" />}
+          </button>
         </div>
       </div>
+
+      {/* Mobile Navigation Drawer / Dropdown */}
+      {mobileMenuOpen && (
+        <div className="md:hidden border-t border-navy-900/10 dark:border-charcoal-100 bg-ivory/95 dark:bg-charcoal/95 backdrop-blur-md px-4 py-3 space-y-2 animate-in slide-in-from-top-2 duration-150">
+          <button
+            onClick={() => {
+              setMobileMenuOpen(false);
+              onNavigate('chat');
+            }}
+            className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs font-semibold ${
+              currentView === 'chat'
+                ? 'bg-gold-500/15 text-gold-600 dark:text-gold-400 font-bold'
+                : 'text-slate-700 dark:text-slate-200 hover:bg-navy-900/5 dark:hover:bg-charcoal-300'
+            }`}
+          >
+            <Sparkles className="w-4 h-4 text-gold-500" />
+            <span>{t('nav.chat', 'Legal AI Assistant')}</span>
+          </button>
+
+          {user ? (
+            <>
+              <button
+                onClick={() => {
+                  setMobileMenuOpen(false);
+                  onNavigate('dashboard');
+                }}
+                className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs font-semibold ${
+                  currentView === 'dashboard'
+                    ? 'bg-gold-500/15 text-gold-600 dark:text-gold-400 font-bold'
+                    : 'text-slate-700 dark:text-slate-200 hover:bg-navy-900/5 dark:hover:bg-charcoal-300'
+                }`}
+              >
+                <LayoutDashboard className="w-4 h-4 text-gold-500" />
+                <span>{t('nav.dashboard', 'Dashboard')}</span>
+              </button>
+
+              <button
+                onClick={() => {
+                  setMobileMenuOpen(false);
+                  handleProtectedAction(onOpenVault);
+                }}
+                className="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs font-semibold text-slate-700 dark:text-slate-200 hover:bg-navy-900/5 dark:hover:bg-charcoal-300"
+              >
+                <FolderLock className="w-4 h-4 text-gold-500" />
+                <span>{t('nav.vault', 'Document Vault')}</span>
+              </button>
+
+              <button
+                onClick={() => {
+                  setMobileMenuOpen(false);
+                  onOpenUpload();
+                }}
+                className="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs font-semibold text-gold-600 dark:text-gold-400 bg-gold-500/10"
+              >
+                <Plus className="w-4 h-4" />
+                <span>{t('nav.upload', 'Upload Document')}</span>
+              </button>
+
+              <button
+                onClick={() => {
+                  setMobileMenuOpen(false);
+                  onNavigate('settings');
+                }}
+                className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs font-semibold ${
+                  currentView === 'settings'
+                    ? 'bg-gold-500/15 text-gold-600 dark:text-gold-400 font-bold'
+                    : 'text-slate-700 dark:text-slate-200 hover:bg-navy-900/5 dark:hover:bg-charcoal-300'
+                }`}
+              >
+                <Settings className="w-4 h-4 text-gold-500" />
+                <span>{t('nav.settings', 'Settings')}</span>
+              </button>
+
+              <div className="border-t border-navy-900/10 dark:border-charcoal-100 my-1 pt-1" />
+
+              <button
+                onClick={() => {
+                  setMobileMenuOpen(false);
+                  logout();
+                }}
+                className="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs font-semibold text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/30"
+              >
+                <LogOut className="w-4 h-4" />
+                <span>{t('nav.signOut', 'Sign Out')} ({user.email})</span>
+              </button>
+            </>
+          ) : (
+            <>
+              <button
+                onClick={() => {
+                  setMobileMenuOpen(false);
+                  handleProtectedAction(onOpenVault);
+                }}
+                className="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs font-semibold text-slate-700 dark:text-slate-200 hover:bg-navy-900/5 dark:hover:bg-charcoal-300"
+              >
+                <FolderLock className="w-4 h-4 text-gold-500" />
+                <span>{t('nav.vault', 'Document Vault')}</span>
+              </button>
+
+              <div className="border-t border-navy-900/10 dark:border-charcoal-100 my-1 pt-1 flex gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    setMobileMenuOpen(false);
+                    onNavigate('login');
+                  }}
+                  className="flex-1 text-xs"
+                >
+                  <LogIn className="w-3.5 h-3.5 mr-1" />
+                  <span>{t('nav.login', 'Sign In')}</span>
+                </Button>
+                <Button
+                  variant="primary"
+                  size="sm"
+                  onClick={() => {
+                    setMobileMenuOpen(false);
+                    onNavigate('signup');
+                  }}
+                  className="flex-1 text-xs"
+                >
+                  <UserPlus className="w-3.5 h-3.5 mr-1 text-accent" />
+                  <span>{t('nav.signup', 'Sign Up')}</span>
+                </Button>
+              </div>
+            </>
+          )}
+
+          <div className="border-t border-navy-900/10 dark:border-charcoal-100 my-1 pt-1">
+            <a
+              href="/api/docs/"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-center gap-2 px-3 py-2 text-xs text-slate-500 dark:text-slate-400 hover:text-navy-900 dark:hover:text-gold-400"
+            >
+              <BookOpen className="w-3.5 h-3.5 text-accent" />
+              <span>Interactive API Documentation</span>
+            </a>
+          </div>
+        </div>
+      )}
     </header>
   );
 }

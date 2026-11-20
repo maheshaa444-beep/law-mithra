@@ -8,7 +8,7 @@ import json
 import logging
 import re
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 from knowledge.services.gemini_client import GeminiClient
@@ -65,7 +65,7 @@ def generate_report(document_text: str, language: str = "en", document_id: str =
     Returns a dict with all 7 sections + metadata.
     """
     report_id = f"LM-{uuid.uuid4().hex[:8].upper()}"
-    generated_at = datetime.utcnow().strftime("%d/%m/%Y %H:%M UTC")
+    generated_at = datetime.now(timezone.utc).strftime("%d/%m/%Y %H:%M UTC")
 
     # Truncate very long documents to stay within token limits (~3000 words)
     max_chars = 12000
@@ -151,7 +151,7 @@ def generate_report(document_text: str, language: str = "en", document_id: str =
             "rights_next_steps": "Preserve original document and any supporting receipts or media. Follow up with the designated station or authority. Consult an advocate for legal recourse.",
             "advocate_questions": "Verify territorial and subject-matter jurisdiction. Check whether limitation period applies. Confirm evidence compliance under Section 65B IEA / Section 63 BSA.",
             "current_stage": "Complaint submission",
-            "last_updated_date": datetime.utcnow().strftime("%d/%m/%Y"),
+            "last_updated_date": datetime.now(timezone.utc).strftime("%d/%m/%Y"),
         }
 
     NP = "Not provided"

@@ -8,7 +8,8 @@ import {
   CheckCircle2,
   Loader2,
   ShieldAlert,
-  User as UserIcon
+  User as UserIcon,
+  ArrowLeft
 } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/Card';
@@ -16,20 +17,13 @@ import { useAuth } from '@/context/AuthContext';
 import { useToast } from '@/components/ui/Toast';
 import { changeUserPassword, deleteUserAccount } from '@/lib/api';
 import { useLanguage } from '@/context/LanguageContext';
-import { SupportedLanguage } from '@/lib/translations';
+import { SupportedLanguage, SUPPORTED_LANGUAGES } from '@/lib/translations';
 
-const LANGUAGES = [
-  { code: 'en', label: 'English' },
-  { code: 'kn', label: 'ಕನ್ನಡ (Kannada)' },
-  { code: 'hi', label: 'हिन्दी (Hindi)' },
-  { code: 'te', label: 'తెలుగు (Telugu)' },
-  { code: 'ta', label: 'தமிழ் (Tamil)' },
-  { code: 'ml', label: 'മലയാളം (Malayalam)' },
-  { code: 'mr', label: 'मराठी (Marathi)' },
-  { code: 'bn', label: 'বাংলা (Bengali)' },
-];
+interface SettingsPageProps {
+  onBack?: () => void;
+}
 
-export function SettingsPage() {
+export function SettingsPage({ onBack }: SettingsPageProps = {}) {
   const { user, updateProfile, textSize, setTextSize, logout } = useAuth();
   const { addToast } = useToast();
   const { language, setLanguage } = useLanguage();
@@ -152,14 +146,27 @@ export function SettingsPage() {
 
   return (
     <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-10 space-y-8 animate-in fade-in duration-200">
-      {/* Title */}
-      <div>
-        <h1 className="text-2xl sm:text-3xl font-heading font-bold text-navy-900 dark:text-ivory">
-          Account & Privacy Settings
-        </h1>
-        <p className="text-xs sm:text-sm text-slate-500 dark:text-slate-400 mt-1">
-          Manage your account preferences, accessibility text size, and data privacy
-        </p>
+      {/* Title with Back Button */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+        <div>
+          <h1 className="text-2xl sm:text-3xl font-heading font-bold text-navy-900 dark:text-ivory">
+            Account & Privacy Settings
+          </h1>
+          <p className="text-xs sm:text-sm text-slate-500 dark:text-slate-400 mt-1">
+            Manage your account preferences, accessibility text size, and data privacy
+          </p>
+        </div>
+        {onBack && (
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={onBack}
+            className="self-start sm:self-auto gap-2"
+          >
+            <ArrowLeft className="w-4 h-4" />
+            <span>Back to Dashboard</span>
+          </Button>
+        )}
       </div>
 
       {/* Profile Overview Card */}
@@ -200,9 +207,9 @@ export function SettingsPage() {
               disabled={isUpdatingLang}
               className="w-full px-3.5 py-2.5 text-xs sm:text-sm bg-white dark:bg-charcoal border border-slate-300 dark:border-charcoal-100 rounded-lg focus:outline-none focus:ring-2 focus:ring-gold-500/50 text-slate-800 dark:text-slate-100"
             >
-              {LANGUAGES.map((l) => (
+              {SUPPORTED_LANGUAGES.map((l) => (
                 <option key={l.code} value={l.code}>
-                  {l.label}
+                  {l.nativeName} ({l.name})
                 </option>
               ))}
             </select>
@@ -234,11 +241,10 @@ export function SettingsPage() {
                 key={item.id}
                 type="button"
                 onClick={() => handleTextSizeChange(item.id as any)}
-                className={`flex flex-col items-center justify-center p-3 rounded-lg border text-xs transition-all ${
-                  textSize === item.id
-                    ? 'border-gold-500 bg-gold-500/10 text-navy-900 dark:text-ivory font-bold shadow-xs'
-                    : 'border-slate-300 dark:border-charcoal-100 hover:border-gold-500/50 bg-white/50 dark:bg-charcoal/50 text-slate-600 dark:text-slate-400'
-                }`}
+                className={`flex flex-col items-center justify-center p-3 rounded-lg border text-xs transition-all ${textSize === item.id
+                  ? 'border-gold-500 bg-gold-500/10 text-navy-900 dark:text-ivory font-bold shadow-xs'
+                  : 'border-slate-300 dark:border-charcoal-100 hover:border-gold-500/50 bg-white/50 dark:bg-charcoal/50 text-slate-600 dark:text-slate-400'
+                  }`}
               >
                 <span>{item.label}</span>
                 <span className="text-[10px] text-slate-400 mt-0.5">{item.size}</span>

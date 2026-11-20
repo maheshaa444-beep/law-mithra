@@ -18,6 +18,7 @@ import {
 } from 'lucide-react';
 import { useLanguage } from '@/context/LanguageContext';
 import { SupportedLanguage } from '@/lib/translations';
+import { askLegalAssistant } from '@/lib/api';
 
 interface ApplicableSection {
   act: string;
@@ -85,29 +86,12 @@ export function LegalAssistantChat({ onClose, standalone = false }: LegalAssista
     setIsSubmitting(true);
 
     try {
-      const response = await fetch('/api/knowledge/chat/', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          query: text,
-          preferred_language: language,
-          auto_detect_language: autoDetectLang,
-        }),
-      });
-
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
-        throw new Error(errorData.error || `Server responded with status ${response.status}`);
-      }
-
-      const data = await response.json();
+      const data = await askLegalAssistant(text, language, autoDetectLang);
 
       const aiMsg: ChatMessage = {
         id: `ai-${Date.now()}`,
         role: 'assistant',
-        content: data.legal_issue || t('chat.subtitle'),
+        content: data.explanation || data.legal_issue || t('chat.subtitle'),
         detectedLanguage: data.detected_language,
         targetLanguage: data.target_language,
         legalIssue: data.legal_issue,

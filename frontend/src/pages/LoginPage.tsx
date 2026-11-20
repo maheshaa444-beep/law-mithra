@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { motion, useMotionValue, useSpring, useTransform } from 'framer-motion';
-import { Mail, Lock, Eye, EyeOff, Loader2, ArrowRight, AlertCircle } from 'lucide-react';
+import { Mail, Lock, Eye, EyeOff, Loader2, ArrowRight, AlertCircle, ArrowLeft } from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
 import { useToast } from '@/components/ui/Toast';
 import { useLanguage } from '@/context/LanguageContext';
@@ -249,6 +249,20 @@ export function LoginPage({ onNavigateSignup, onLoginSuccess, onNavigateHome }: 
         </div>
       </motion.div>
 
+      {/* Top Header: Back to Home & Language Switcher */}
+      {onNavigateHome && (
+        <div className="absolute top-5 sm:top-7 left-5 sm:right-auto sm:left-8 lg:left-12 z-50">
+          <button
+            type="button"
+            onClick={onNavigateHome}
+            className="group inline-flex items-center gap-2 px-3.5 py-2 rounded-full border border-[#D9A441]/50 hover:border-[#F7DE9B] bg-[#0A0A0A]/85 hover:bg-[#14120D] text-white/90 hover:text-white text-xs font-sans transition-all cursor-pointer backdrop-blur-md"
+          >
+            <ArrowLeft className="w-3.5 h-3.5 text-[#D9A441] group-hover:-translate-x-0.5 transition-transform" />
+            <span>Back to Home</span>
+          </button>
+        </div>
+      )}
+
       {/* Top-Right Language Switcher */}
       <div className="absolute top-5 sm:top-7 right-5 sm:right-8 lg:right-12 z-50">
         <GoldLanguageSwitch />
@@ -446,7 +460,7 @@ export function LoginPage({ onNavigateSignup, onLoginSuccess, onNavigateHome }: 
                   autoFocus
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
-                  placeholder={t('login.emailPlaceholder', 'First Email')}
+                  placeholder={t('login.emailPlaceholder', 'your.email@example.com')}
                   className="w-full bg-transparent text-white placeholder-[#7A7A7A] text-sm font-sans outline-none"
                 />
               </div>
@@ -502,7 +516,7 @@ export function LoginPage({ onNavigateSignup, onLoginSuccess, onNavigateHome }: 
 
             {/* Footer */}
             <div className="text-center font-sans text-xs sm:text-[13px] text-white/70">
-              <span>{t('login.alreadyHaveAccount', 'Already have an account?')} </span>
+              <span>{t('login.dontHaveAccount', "Don't have an account?")} </span>
               <button
                 type="button"
                 onClick={onNavigateSignup}

@@ -235,3 +235,199 @@ def test_login_throttling_returns_429(api_client):
     # 6th attempt throttled
     throttled_res = api_client.post(login_url, payload, format='json')
     assert throttled_res.status_code == status.HTTP_429_TOO_MANY_REQUESTS
+
+
+@pytest.mark.django_db
+def test_registration_normalization_and_login_case_insensitivity(api_client):
+    """
+    Test registration normalizes email with leading/trailing whitespace and mixed case,
+    and subsequent logins succeed regardless of casing or whitespace.
+    """
+    reg_url = reverse('auth-register')
+    reg_payload = {
+        'full_name': 'Asha Devi',
+        'email': '  Asha.Devi@LawMithra.IN  ',
+        'password': 'SecurePassword!2026',
+        'confirm_password': 'SecurePassword!2026',
+        'preferred_language': 'kn',
+    }
+    reg_res = api_client.post(reg_url, reg_payload, format='json')
+    assert reg_res.status_code == status.HTTP_201_CREATED
+    data = reg_res.json()
+    assert data['user']['email'] == 'asha.devi@lawmithra.in'
+
+    # Verify User record in DB has normalized email and username
+    user = User.objects.get(email='asha.devi@lawmithra.in')
+    assert user.username == 'asha.devi@lawmithra.in'
+    assert hasattr(user, 'profile')
+    assert user.profile.preferred_language == 'kn'
+
+    login_url = reverse('auth-login')
+
+    # 1. Login with exact lowercase
+    res_lower = api_client.post(login_url, {
+        'email': 'asha.devi@lawmithra.in',
+        'password': 'SecurePassword!2026',
+    }, format='json')
+    assert res_lower.status_code == status.HTTP_200_OK
+
+    # 2. Login with uppercase and trailing spaces
+    res_upper = api_client.post(login_url, {
+        'email': '  ASHA.DEVI@LAWMITHRA.IN  ',
+        'password': 'SecurePassword!2026',
+    }, format='json')
+    assert res_upper.status_code == status.HTTP_200_OK
+
+
+@pytest.mark.django_db
+def test_registration_rejects_conflicting_username(api_client):
+    """
+    Test registration returns 400 Bad Request (not 500) if username already exists in auth_user.
+    """
+    User.objects.create(username='legacy.user@lawmithra.in', email='')
+
+    reg_url = reverse('auth-register')
+    res = api_client.post(reg_url, {
+        'full_name': 'Legacy User',
+        'email': 'LEGACY.USER@LAWMITHRA.IN',
+        'password': 'StrongPassword!2026',
+        'confirm_password': 'StrongPassword!2026',
+    }, format='json')
+    assert res.status_code == status.HTTP_400_BAD_REQUEST
+    assert 'email' in res.json()
+    assert 'already exists' in res.json()['email'][0].lower()
+
+
+@pytest.mark.django_db
+def test_login_handles_duplicate_email_candidates_safely(api_client):
+    """
+    Test login checks password across candidate users and does not crash with MultipleObjectsReturned.
+    """
+    u1 = User.objects.create(username='dupe_acc_1', email='shared@lawmithra.in')
+    u1.set_password('PasswordOne!123')
+    u1.save()
+
+    u2 = User.objects.create(username='dupe_acc_2', email='shared@lawmithra.in')
+    u2.set_password('PasswordTwo!456')
+    u2.save()
+
+    login_url = reverse('auth-login')
+
+    # Login matching user 1
+    res1 = api_client.post(login_url, {'email': 'shared@lawmithra.in', 'password': 'PasswordOne!123'}, format='json')
+    assert res1.status_code == status.HTTP_200_OK
+    assert res1.json()['user']['id'] == u1.id
+
+    # Login matching user 2
+    res2 = api_client.post(login_url, {'email': 'shared@lawmithra.in', 'password': 'PasswordTwo!456'}, format='json')
+    assert res2.status_code == status.HTTP_200_OK
+    assert res2.json()['user']['id'] == u2.id
+
+    # Wrong password for both
+    res_bad = api_client.post(login_url, {'email': 'shared@lawmithra.in', 'password': 'WrongPassword!'}, format='json')
+    assert res_bad.status_code == status.HTTP_400_BAD_REQUEST
+
+
+@pytest.mark.django_db
+def test_login_supports_username(api_client):
+    """
+    Test login supports username even when username is not in standard email address format.
+    """
+    admin_user = User.objects.create_user(username='court_registrar', email='registrar@karnataka.gov.in', password='RegistrarPassword!2026')
+
+    login_url = reverse('auth-login')
+
+    # Log in using username
+    res = api_client.post(login_url, {'email': 'court_registrar', 'password': 'RegistrarPassword!2026'}, format='json')
+    assert res.status_code == status.HTTP_200_OK
+    assert res.json()['user']['id'] == admin_user.id
+
+
+@pytest.mark.django_db
+def test_login_disabled_account_rejected(api_client):
+    """
+    Test disabled accounts receive a clear, safe 400 rejection message.
+    """
+    user = User.objects.create_user(username='suspended@lawmithra.in', email='suspended@lawmithra.in', password='ValidPassword!2026', is_active=False)
+
+    login_url = reverse('auth-login')
+    res = api_client.post(login_url, {'email': 'suspended@lawmithra.in', 'password': 'ValidPassword!2026'}, format='json')
+    assert res.status_code == status.HTTP_400_BAD_REQUEST
+    assert 'Account is disabled' in str(res.json())
+
+
+@pytest.mark.django_db
+def test_refresh_token_rejects_inactive_user(api_client):
+    """
+    Test refreshing an access token for a deactivated user returns 401 and clears cookie.
+    """
+    user = User.objects.create_user(username='temp_active@lawmithra.in', email='temp_active@lawmithra.in', password='ValidPassword!2026')
+    refresh = RefreshToken.for_user(user)
+
+    # Deactivate user
+    user.is_active = False
+    user.save()
+
+    refresh_url = reverse('auth-refresh')
+    res = api_client.post(refresh_url, {'refresh': str(refresh)}, format='json')
+    assert res.status_code == status.HTTP_401_UNAUTHORIZED
+    assert 'disabled' in str(res.json()).lower()
+
+
+@pytest.mark.django_db
+def test_change_password_cycle_and_relogin(api_client):
+    """
+    Test password change validation:
+    - Rejects same password
+    - Rejects invalid current password
+    - Successfully changes password
+    - Disallows login with old password
+    - Allows login with new password
+    - Returns fresh valid JWT tokens
+    """
+    user = User.objects.create_user(username='pwd_test@lawmithra.in', email='pwd_test@lawmithra.in', password='OldPassword!2026')
+    refresh = RefreshToken.for_user(user)
+    api_client.credentials(HTTP_AUTHORIZATION=f'Bearer {refresh.access_token}')
+
+    change_url = reverse('auth-change-password')
+
+    # 1. Rejects new_password identical to current_password
+    res_same = api_client.post(change_url, {
+        'current_password': 'OldPassword!2026',
+        'new_password': 'OldPassword!2026',
+    }, format='json')
+    assert res_same.status_code == status.HTTP_400_BAD_REQUEST
+    assert 'new_password' in res_same.json()
+
+    # 2. Rejects incorrect current password
+    res_wrong = api_client.post(change_url, {
+        'current_password': 'WrongCurrentPassword',
+        'new_password': 'NewBrandPassword!2026',
+    }, format='json')
+    assert res_wrong.status_code == status.HTTP_400_BAD_REQUEST
+
+    # 3. Valid password change
+    res_good = api_client.post(change_url, {
+        'current_password': 'OldPassword!2026',
+        'new_password': 'NewBrandPassword!2026',
+    }, format='json')
+    assert res_good.status_code == status.HTTP_200_OK
+    assert 'access' in res_good.json()
+    assert 'refresh' in res_good.json()
+
+    # 4. Old password rejected at login
+    api_client.credentials()  # clear credentials
+    login_url = reverse('auth-login')
+    old_res = api_client.post(login_url, {
+        'email': 'pwd_test@lawmithra.in',
+        'password': 'OldPassword!2026',
+    }, format='json')
+    assert old_res.status_code == status.HTTP_400_BAD_REQUEST
+
+    # 5. New password accepted at login
+    new_res = api_client.post(login_url, {
+        'email': 'pwd_test@lawmithra.in',
+        'password': 'NewBrandPassword!2026',
+    }, format='json')
+    assert new_res.status_code == status.HTTP_200_OK
+    assert 'access' in new_res.json()
